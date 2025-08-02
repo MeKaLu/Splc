@@ -4,7 +4,7 @@ end namespace
 
 struc Normal data*&        
         . db data
-        .len = $ - $$
+        .len = $ - .
         .type_check = "String"
 end struc
 
@@ -64,19 +64,19 @@ _copy:
         ; index
         push r10
         ; character
-        push r8
+        push rax
 
         xor r10, r10
         .loop:
-                mov r8, [rsi + r10]   ; ch
-                mov [rdi + r10], r8   ; dest[i] = ch
+                mov al, [rsi + r10]   ; ch
+                mov [rdi + r10], al   ; dest[i] = ch
                 cmp r10, rdx          ; if i == length
                 je .exit
                 inc r10
                 jmp .loop
 
         .exit:
-        pop r8
+        pop rax
         pop r10
         ret
 
@@ -92,3 +92,43 @@ len:
                 jmp .loop
         .exit:
         ret
+
+; Compares 2 strings
+; @param rdi: a
+; @param rsi: b
+; @param rdx: a.length
+; @param r10: b.length
+; @param rax: return value
+?cmp:
+        push r8  ; index
+        push r9  ; rval
+        push rbx ; ch2
+
+        cmp rdx, r10
+        jne .exit_false
+
+        xor rax, rax
+        mov r9, 1
+        .loop:
+                ; loop condition
+                cmp r8, rdx
+                je .exit
+
+                ; compare characters
+                mov bl, [rdi + r8]
+                mov al, [rsi + r8]
+                cmp al, bl
+                jne .exit_false
+
+                inc r8
+                jmp .loop
+        
+        .exit_false:
+                mov r9, 0
+        .exit:
+                mov rax, r9
+        pop rbx
+        pop r9
+        pop r8
+        ret
+        

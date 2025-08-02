@@ -1,3 +1,23 @@
+macro saveReg
+        push rax
+        push rdi
+        push rsi
+        push rdx
+        push r10
+        push r8
+        push r9
+end macro
+
+macro restoreReg
+        pop r9
+        pop r8
+        pop r10
+        pop rdx
+        pop rsi
+        pop rdi
+        pop rax
+end macro
+
 ; Calls the exit syscall:
 macro exit code*
         mov rax, 60
