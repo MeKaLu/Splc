@@ -1,0 +1,8 @@
+stdout "Hello World!", 10
+// Comment
+
+// Immutable by default
+// foo :int = 33 
+// bar := 35
+// baz := 1 + foo + bar
+// stdout tostring baz
