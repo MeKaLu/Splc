@@ -70,17 +70,19 @@ main:
 exit:      syscall.exit 0
 exitError: syscall.exit 1
 
-; rax = i
-;  cl = ch
 ; rsi = buffer
 ; rdx = buffer2
 parse:
+        push rax
+        push rcx
+
         xor rax, rax
         .loop:
                 mov cl, [rsi + rax] ; buffer[i]
                 ; Check if ch == ' '
                 cmp cl, ' '
                 je .space
+                        ; Add ch to buffer2
                         push r10
                         mov r10, [buffer2.len] ; j 
                         mov [rdx + r10], cl ; buffer2[j] = ch
@@ -90,11 +92,15 @@ parse:
                 .space:
                         call isKeyword
                 .space_after:
+
                 cmp rax, [buffer.len]
                 jg .exit
                 inc rax
                 jmp .loop
         .exit:
+
+        pop rcx
+        pop rax
         ret
 
 isKeyword:
