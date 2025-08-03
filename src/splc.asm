@@ -14,7 +14,7 @@ main:
         ; Get the file path
         cmp qword [rsp], 2
         je .file_path_got
-        String.stdout e_expected_file_path
+        string.stdout e_expected_file_path
         je exitError
 
         ; Get the length of the file path
@@ -22,13 +22,13 @@ main:
         mov rax, [rsp + 16]
         push rax 
         mov rdi, rax
-        call String.len
+        call string.len
         mov [file_path.len], rax
 
         ; Checks the length is within the the capacity
         cmp [file_path.len], file_path.cap
         jle .file_path_success
-        String.stdout e_expected_file_path_256
+        string.stdout e_expected_file_path_256
         je exitError
 
         ; Copies the file path to the variable
@@ -36,14 +36,14 @@ main:
         mov rdi, file_path
         pop rsi ; src
         mov rdx, [file_path.len]
-        call String._copy 
+        call string.copyr 
 
         ; Open the file
         syscall.open file_path
         mov [fd], rax
         cmp [fd], -1    ; check for error
         jne .file_open_success
-        String.stdout e_failed_to_open_file
+        string.stdout e_failed_to_open_file
         je exitError
 
         ; Get the length of the file
@@ -59,7 +59,7 @@ main:
         mov rsi, buffer
         mov rdx, buffer2
         call parse
-        ; String.stdout buffer2
+        ; string.stdout buffer2
 
         ; Close the file
         syscall.close [fd]
@@ -114,13 +114,13 @@ isKeyword:
         mov rsi, rdx                 ; buffer2
         mov rdx, keyword_stdout.len  ; length
         mov r10, [buffer2.len]       ; length
-        call String.cmp 
+        call string.cmpr
         cmp rax, 1
         jne .false
         ; .true:
                 syscall.saveReg
-                String.stdout keyword_stdout
-                String.stdout newline
+                string.stdout keyword_stdout
+                string.stdout newline
                 syscall.restoreReg
                 mov [buffer2.len], 0
                 pop rax
@@ -130,11 +130,11 @@ isKeyword:
                 ret
         .false:
                 syscall.saveReg
-                String.stdout e_expected_keyword_found
-                String.stdout quote
-                String.stdout buffer2
-                String.stdout quote
-                String.stdout newline
+                string.stdout e_expected_keyword_found
+                string.stdout quote
+                string.stdout buffer2
+                string.stdout quote
+                string.stdout newline
                 syscall.restoreReg
                 call exitError
 

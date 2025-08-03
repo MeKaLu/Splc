@@ -53,14 +53,14 @@ macro copy dest*, src*
 
         mov rdi, dest
         mov rsi, src
-        call _copy
+        call copyr
 end macro
 
 ; Copies the string
 ; @param rdi: dest
 ; @param rsi: src
 ; @param rdx: length
-_copy:
+copyr:
         ; index
         push r10
         ; character
@@ -99,7 +99,7 @@ len:
 ; @param rdx: a.length
 ; @param r10: b.length
 ; @param rax: return value
-?cmp:
+?cmpr:
         push r8  ; index
         push r9  ; rval
         push rbx ; ch2
