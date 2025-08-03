@@ -177,7 +177,7 @@ expectKeyword:
                 syscall.restoreReg
                 mov qword    [parse_state],                 PARSE_STATE_EXPRESSION
                 mov qword    [parse_state.literal],         PARSE_STATE_NONE
-                mov          [parse_state.buffer],          0
+                mov          [parse_state.append_continue], 1
                 string.clear parse_state.buffer
                 pop rax
                 pop rsi
