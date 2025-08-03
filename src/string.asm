@@ -26,6 +26,13 @@ macro stdout str*
         end if
 end macro
 
+; "Clears" the string
+macro clear str*
+        assert str.type_check = "String.Reserved"
+        mov [str],     0
+        mov [str.len], 0
+end macro
+
 macro copy dest*, src*
         if dest.type_check = "String"
                 if src.type_check = "String"

@@ -8,6 +8,33 @@ namespace String
 include "string.asm"
 end namespace
 
+segment readable
+dbg_fnd_str_ltrl         String.Normal "Debug: Found string literal start!", 10
+dbg_fnd_str_ltrl_mid     String.Normal "Debug: Found string literal middle!", 10
+dbg_fnd_str_ltrl_end     String.Normal "Debug: Found string literal end!", 10
+e_expected_file_path     String.Normal "Error: Expected a file path, got none!", 10
+e_expected_file_path_256 String.Normal "Error: Expected a file path length to be < 256!", 10
+e_failed_to_open_file    String.Normal "Error: Failed to open the file!", 10
+e_expected_keyword_found String.Normal "Error: Expected keyword, found " 
+keyword_stdout           String.Normal "stdout"
+quote                    String.Normal "`"
+newline                  String.Normal 10
+
+segment readable writeable
+fd dq 0
+file_length dq 0
+file_path String.Reserved 256
+parse_state:              dq PARSE_STATE_NONE
+        .buffer           String.Reserved 1024
+        .literal          dq PARSE_STATE_NONE
+        .append_continue  db 0
+code    String.Reserved 1024
+
+PARSE_STATE_NONE            = 0x00
+PARSE_STATE_KEYWORD         = 0x10
+PARSE_STATE_EXPRESSION      = 0x20
+PARSE_STATE_EXPRESSION_STR  = 0x21
+
 segment executable
 entry main
 main:
@@ -53,13 +80,13 @@ main:
         syscall.lseek.set [fd], 0
         
         ; Read the file
-        syscall.read [fd], buffer, buffer.cap
-        mov [buffer.len], rax
+        syscall.read [fd], code, code.cap
+        mov [code.len], rax
 
-        mov rsi, buffer
-        mov rdx, buffer2
+        mov rsi, code
+        mov rdx, parse_state.buffer
         call parse
-        ; string.stdout buffer2
+        ; string.stdout parse_state.buffer
 
         ; Close the file
         syscall.close [fd]
@@ -70,30 +97,51 @@ main:
 exit:      syscall.exit 0
 exitError: syscall.exit 1
 
-; rsi = buffer
-; rdx = buffer2
+; rsi = code
+; rdx = parse_state.buffer
 parse:
         push rax
         push rcx
 
         xor rax, rax
         .loop:
-                mov cl, [rsi + rax] ; buffer[i]
-                ; Check if ch == ' '
+                mov cl, [rsi + rax] ; code[i]
+                mov ch, [parse_state.append_continue]
+                ; if append_continue == true then append
+                ; if code[i] == ' ' then descent
+                cmp ch, 1
+                je .append
                 cmp cl, ' '
-                je .space
-                        ; Add ch to buffer2
+                je .descent
+                .append:
+                        ; Add cl to parse_state.buffer
                         push r10
-                        mov r10, [buffer2.len] ; j 
-                        mov [rdx + r10], cl ; buffer2[j] = ch
-                        inc [buffer2.len]
+                        mov r10, [parse_state.buffer.len] ; j 
+                        mov [rdx + r10], cl ; parse_state.buffer[j] = cl
+                        inc [parse_state.buffer.len]
                         pop r10
-                        jmp .space_after
-                .space:
-                        call isKeyword
-                .space_after:
+                        cmp ch, 0
+                        je .space_after
+                .descent:
+                        cmp qword [parse_state], PARSE_STATE_NONE
+                        je .expect_any
+                        cmp qword [parse_state], PARSE_STATE_KEYWORD
+                        je .expect_keyword
+                        cmp qword [parse_state], PARSE_STATE_EXPRESSION
+                        je .expect_expression
+                        .expect_any:
+                                call expectAny
+                                jmp .descent
+                        .expect_keyword:
+                                call expectKeyword
+                                jmp .space_after
+                        .expect_expression:
+                                call expectExpression
+                                jmp .space_after
 
-                cmp rax, [buffer.len]
+                .space_after:
+                ; Check for the code EOF
+                cmp rax, [code.len]
                 jg .exit
                 inc rax
                 jmp .loop
@@ -103,7 +151,12 @@ parse:
         pop rax
         ret
 
-isKeyword:
+expectAny:
+        ; TODO:
+        mov qword [parse_state], PARSE_STATE_KEYWORD
+        ret
+
+expectKeyword:
         push rdi
         push rdx
         push rsi
@@ -111,9 +164,9 @@ isKeyword:
 
         xor rax, rax
         mov rdi, keyword_stdout      ; stdout
-        mov rsi, rdx                 ; buffer2
+        mov rsi, rdx                 ; parse_state.buffer
         mov rdx, keyword_stdout.len  ; length
-        mov r10, [buffer2.len]       ; length
+        mov r10, [parse_state.buffer.len]       ; length
         call string.cmpr
         cmp rax, 1
         jne .false
@@ -122,7 +175,10 @@ isKeyword:
                 string.stdout keyword_stdout
                 string.stdout newline
                 syscall.restoreReg
-                mov [buffer2.len], 0
+                mov qword    [parse_state],                 PARSE_STATE_EXPRESSION
+                mov qword    [parse_state.literal],         PARSE_STATE_NONE
+                mov          [parse_state.buffer],          0
+                string.clear parse_state.buffer
                 pop rax
                 pop rsi
                 pop rdx
@@ -132,25 +188,62 @@ isKeyword:
                 syscall.saveReg
                 string.stdout e_expected_keyword_found
                 string.stdout quote
-                string.stdout buffer2
+                string.stdout parse_state.buffer
                 string.stdout quote
                 string.stdout newline
                 syscall.restoreReg
                 call exitError
 
-segment readable
-e_expected_file_path     String.Normal "Error: Expected a file path, got none!", 10
-e_expected_file_path_256 String.Normal "Error: Expected a file path length to be < 256!", 10
-e_failed_to_open_file    String.Normal "Error: Failed to open the file!", 10
-e_expected_keyword_found String.Normal "Error: Expected keyword, found " 
-keyword_stdout           String.Normal "stdout"
-quote                    String.Normal "`"
-newline                  String.Normal 10
+expectExpression:
+        push rdx
 
-segment readable writeable
-fd dq 0
-file_length dq 0
-buffer    String.Reserved 1024
-buffer2   String.Reserved 1024
-file_path String.Reserved 256
+        cmp [parse_state.literal], PARSE_STATE_EXPRESSION_STR
+        je .literal_str
 
+        cmp byte [rdx], '"'
+        je .string_literal_start
+        cmp byte [rdx], ' '
+        ; TODO:
+        jmp .unknown
+
+        .literal_str:
+        cmp [parse_state.literal], PARSE_STATE_EXPRESSION_STR
+        jne .unknown
+
+        add rdx, [parse_state.buffer.len]
+        dec rdx
+        cmp byte [rdx], '"'
+        je .string_literal_end
+        jne .string_literal_middle
+
+        .string_literal_start:
+                syscall.saveReg
+                string.stdout dbg_fnd_str_ltrl
+                string.stdout parse_state.buffer
+                string.stdout newline
+                syscall.restoreReg
+                mov qword [parse_state.literal],         PARSE_STATE_EXPRESSION_STR
+                mov       [parse_state.append_continue], 1
+                jmp .exit
+        .string_literal_middle:
+                syscall.saveReg
+                string.stdout dbg_fnd_str_ltrl_mid
+                syscall.restoreReg
+                jmp .exit
+        .string_literal_end:
+                syscall.saveReg
+                string.stdout dbg_fnd_str_ltrl_end
+                string.stdout parse_state.buffer
+                string.stdout newline
+                syscall.restoreReg
+                mov qword    [parse_state],                 PARSE_STATE_NONE
+                mov qword    [parse_state.literal],         PARSE_STATE_NONE
+                mov          [parse_state.append_continue], 0
+                string.clear parse_state.buffer
+                jmp .exit
+        .unknown:
+                syscall.exit 69
+
+        .exit:
+        pop rdx
+        ret
