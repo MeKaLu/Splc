@@ -162,6 +162,7 @@ expectKeyword:
         push rsi
         push rax
 
+        ; TODO: go through a list of keywords
         xor rax, rax
         mov rdi, keyword_stdout      ; stdout
         mov rsi, rdx                 ; parse_state.buffer
@@ -207,9 +208,6 @@ expectExpression:
         jmp .unknown
 
         .literal_str:
-        cmp [parse_state.literal], PARSE_STATE_EXPRESSION_STR
-        jne .unknown
-
         add rdx, [parse_state.buffer.len]
         dec rdx
         cmp byte [rdx], '"'
