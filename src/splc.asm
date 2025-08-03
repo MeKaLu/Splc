@@ -121,7 +121,7 @@ parse:
                         inc [parse_state.buffer.len]
                         pop r10
                         cmp ch, 0
-                        je .space_after
+                        je .after_descent
                 .descent:
                         cmp qword [parse_state], PARSE_STATE_NONE
                         je .expect_any
@@ -134,12 +134,12 @@ parse:
                                 jmp .descent
                         .expect_keyword:
                                 call expectKeyword
-                                jmp .space_after
+                                jmp .after_descent
                         .expect_expression:
                                 call expectExpression
-                                jmp .space_after
+                                jmp .after_descent
 
-                .space_after:
+                .after_descent:
                 ; Check for the code EOF
                 cmp rax, [code.len]
                 jg .exit
