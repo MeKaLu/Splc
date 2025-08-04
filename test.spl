@@ -1,2 +1,1 @@
-stdout "Hello Alien World!" 10
-
+stdout symbol, "Hello World!", symbol2  , "Hi, Alien World!"    ,
