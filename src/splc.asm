@@ -15,6 +15,25 @@ struc Token
 end struc
 TOKEN_SIZE = 17
 
+TOKEN_STATE_NONE     = 0x00
+TOKEN_STATE_SYMBOL   = 0x10
+TOKEN_STATE_SLITERAL = 0x20
+
+TOKEN_TYPE_SYMBOL    = 0x00
+TOKEN_TYPE_COMMA     = 0x10
+TOKEN_TYPE_SLITERAL  = 0x20
+
+PARSE_STATE_NONE        = 0x00
+PARSE_STATE_KEYWORD     = 0x10
+PARSE_STATE_EXPRESSION  = 0x20
+
+namespace EMIT
+        STATE_NONE     = 0x00
+        STATE_STDOUT   = 0x01
+        STATE_EXPR     = 0x10
+        STATE_EXPR_VA  = 0x11
+end namespace 
+
 segment readable
 dbg_fnd_str_ltrl          String.Normal "Debug: Found string literal start!", 10
 dbg_fnd_str_ltrl_mid      String.Normal "Debug: Found string literal middle!", 10
@@ -33,8 +52,13 @@ quote                     String.Normal "`"
 newline                   String.Normal 10
 seperation_line           String.Normal "-----------------------", 10
 space                     String.Normal " "
-emit_stdout               String.Normal "syscall.stdout"
-emit_output_path          String.Normal "a.out", 0
+namespace emit
+        output_path       String.Normal "a.out", 0
+        output_path_e     String.Normal "a.out.old", 0
+        stdout            String.Normal "syscall.stdout"
+        mark_va           String.Normal ","
+        mark_sliteral     String.Normal '"'
+end namespace
 namespace keyword
         stdout            String.Normal "stdout"
 end namespace
@@ -51,22 +75,7 @@ tokens:
         .len dq 0
         .cap = 1024
 
-emit_state db EMIT_STATE_NONE
-
-TOKEN_STATE_NONE     = 0x00
-TOKEN_STATE_SYMBOL   = 0x10
-TOKEN_STATE_SLITERAL = 0x20
-
-TOKEN_TYPE_SYMBOL    = 0x00
-TOKEN_TYPE_COMMA     = 0x10
-TOKEN_TYPE_SLITERAL  = 0x20
-
-PARSE_STATE_NONE            = 0x00
-PARSE_STATE_KEYWORD         = 0x10
-PARSE_STATE_EXPRESSION      = 0x20
-
-EMIT_STATE_NONE    = 0x00
-EMIT_STATE_STDOUT  = 0x01
+emit.state db EMIT.STATE_NONE
 
 segment executable
 entry main
@@ -127,7 +136,7 @@ main:
         syscall.close [fd]
 
         ; remove a.out
-        syscall.rename emit_output_path, 0
+        syscall.rename emit.output_path, emit.output_path_e
 
         call tokenize
         ; mov rax, tokens
@@ -351,19 +360,16 @@ parse:
                 cmp r8, PARSE_STATE_EXPRESSION
                 je .parse_state_expression
 
-                .parse_state:
-                       
-                        .parse_state_none:
-                                call expectAny
-                                jmp .parse_state_after
-                        .parse_state_keyword:
-                                call expectKeyword
-                                jmp .parse_state_after
-                        .parse_state_expression:
-                                call expectExpression
-                                jmp .parse_state_after
-                        .parse_state_after:
-                                pop rdi
+                .parse_state_none:
+                        call expectAny
+                        jmp .parse_state_after
+                .parse_state_keyword:
+                        call expectKeyword
+                        jmp .parse_state_after
+                .parse_state_expression:
+                        call expectExpression
+                        jmp .parse_state_after
+                .parse_state_after: pop rdi
 
                 inc r10
                 jmp .loop
@@ -434,8 +440,9 @@ expectKeyword:
                 je  .true
                 jne .false
                 .true:
-                        mov [emit_state], EMIT_STATE_STDOUT
+                        mov [emit.state], EMIT.STATE_STDOUT
                         mov r10, PARSE_STATE_EXPRESSION
+                        call emit
                         jmp .exit
                 .false:
                         ; TODO
@@ -458,6 +465,27 @@ expectKeyword:
 ; @param rdi: token
 expectExpression:
         ; TODO
+        push rbx ; token.type
+
+        mov bl, [rdi + 16] ; token.type
+        cmp bl, TOKEN_TYPE_COMMA
+        je .emit.expr_va
+        cmp bl, TOKEN_TYPE_SLITERAL
+        je .emit.expr
+
+        string.stdout e.unknown_token_type
+        string.stdout e.to_expect
+        call exitError
+
+        .emit.expr:
+                mov [emit.state], EMIT.STATE_EXPR
+                jmp .exit
+        .emit.expr_va:
+                mov [emit.state], EMIT.STATE_EXPR_VA
+                jmp .exit
+
+        .exit:
+        pop rbx
         jmp emit
 
 ; @param r8 : parse_state
@@ -465,7 +493,7 @@ expectExpression:
 ?emit:
         syscall.saveReg
         ; open file        
-        syscall.open emit_output_path, 0101 ; O_CREAT | O_WRONLY
+        syscall.open emit.output_path, 0101 ; O_CREAT | O_WRONLY
         mov [fd], rax
         cmp [fd], -1 ; check for error
         jne .file_open_success
@@ -473,49 +501,46 @@ expectExpression:
         call exitError
 
         .file_open_success:
-        cmp [emit_state], EMIT_STATE_STDOUT
+        syscall.lseek.end [fd], 0
+        cmp [emit.state], EMIT.STATE_STDOUT
         je .write_stdout
+        cmp [emit.state], EMIT.STATE_EXPR
+        je .write_expr
+        cmp [emit.state], EMIT.STATE_EXPR_VA
+        je .write_expr_va
 
         string.stdout e.unknown_emit_state
         string.stdout e.to_emit
         call exitError
 
         .write_stdout:
-                syscall.write [fd], emit_stdout, emit_stdout.len
+                syscall.write [fd], emit.stdout, emit.stdout.len
                 syscall.write [fd], space,       space.len
-
+                jmp .exit
+        .write_expr:
+                syscall.write [fd], emit.mark_sliteral, emit.mark_sliteral.len
                 ; get the expression
                 syscall.restoreReg
-                push rax
                 push r11
                 push r12
-                        mov al, [rdi + 16] ; type
-                        cmp al, TOKEN_TYPE_SLITERAL
-                        je .stdout_sliteral
-
-                        string.stdout e.unknown_token_type
-                        string.stdout e.to_emit
-                        call exitError
-
-                        .stdout_sliteral:
                         mov r11, code
                         add r11, [rdi]
-                        dec r11  ; first quote
                         mov r12, [rdi + 8]
                         sub r12, [rdi]
-                        inc r12  ; last quote
                         syscall.saveReg
                                 syscall.write [fd], r11, r12
                         syscall.restoreReg
-                        jmp .write_stdout_after
-
-                .write_stdout_after:
                 pop r12
                 pop r11
-                pop rax
                 syscall.saveReg
-                jmp .after_write
-        .after_write:
+                syscall.write [fd], emit.mark_sliteral, emit.mark_sliteral.len
+                jmp .exit
+        .write_expr_va:
+                syscall.write [fd], emit.mark_va, emit.mark_va.len
+                jmp .exit
+
+        .exit:
+                mov [emit.state], EMIT.STATE_NONE
 
         ; close file
         syscall.close [fd]
