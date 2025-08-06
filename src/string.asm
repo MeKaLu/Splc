@@ -26,6 +26,17 @@ macro stdout str*
         end if
 end macro
 
+; Calls the internal stderr macro
+macro stderr str*
+        if str.type_check = "String"
+                syscall.stderr str, str.len
+        else if str.type_check = "String.Reserved"
+                syscall.stderr str, [str.len]
+        else
+                assert 0 = 1
+        end if
+end macro
+
 ; "Clears" the string
 macro clear str*
         assert str.type_check = "String.Reserved"

@@ -52,6 +52,15 @@ macro stdout buffer*, buffer_length*
         syscall
 end macro
 
+; Calls the sys_write with stderr syscall:
+macro stderr buffer*, buffer_length*
+        mov rax, 1
+        mov rdi, 2 ; stderr is 2
+        mov rsi, buffer
+        mov rdx, buffer_length
+        syscall
+end macro
+
 ; Calls the sys_open:
 ; Default flag and mode is read only
 macro open filename*, flags:0, mode:0

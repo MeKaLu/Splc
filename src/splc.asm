@@ -35,27 +35,34 @@ namespace EMIT
 end namespace 
 
 segment readable
-dbg_fnd_str_ltrl          String.Normal "Debug: Found string literal start!", 10
-dbg_fnd_str_ltrl_mid      String.Normal "Debug: Found string literal middle!", 10
-dbg_fnd_str_ltrl_end      String.Normal "Debug: Found string literal end!", 10
-e:
-        .expected_file_path      String.Normal "Error: Expected a file path, got none!", 10
-        .expected_file_path_256  String.Normal "Error: Expected a file path length to be < 256!", 10
-        .failed_to_open_file     String.Normal "Error: Failed to open the file!", 10
-        .expected_file_size_1024 String.Normal "Error: Expected a file size to be < 1024!", 10
-        .expected_keyword_found  String.Normal "Error: Expected keyword, found " 
-        .unknown_token_type      String.Normal "Error: Unknown token type "
-        .unknown_emit_state      String.Normal "Error: Unknown emit state "
-        .to_expect               String.Normal "to expect", 10
-        .to_emit                 String.Normal "to emit", 10
-quote                     String.Normal "`"
-newline                   String.Normal 10
-seperation_line           String.Normal "-----------------------", 10
-space                     String.Normal " "
+namespace dbg
+        fnd_str_ltrl          String.Normal "Debug: Found string literal start!", 10
+        fnd_str_ltrl_mid      String.Normal "Debug: Found string literal middle!", 10
+        fnd_str_ltrl_end      String.Normal "Debug: Found string literal end!", 10
+        quote                 String.Normal "`"
+        newline               String.Normal 10
+        seperation_line       String.Normal "-----------------------", 10
+        space                 String.Normal " "
+        token_type_symbol     String.Normal "SYMBOL"
+        token_type_comma      String.Normal "COMMA"
+        token_type_sliteral   String.Normal "SLITERAL"
+end namespace
+namespace e
+        expected_file_path      String.Normal "Error: Expected a file path, got none!", 10
+        expected_file_path_256  String.Normal "Error: Expected a file path length to be < 256!", 10
+        failed_to_open_file     String.Normal "Error: Failed to open the file!", 10
+        expected_file_size_1024 String.Normal "Error: Expected a file size to be < 1024!", 10
+        expected_keyword_found  String.Normal "Error: Expected keyword, found " 
+        unknown_token_type      String.Normal "Error: Unknown token type "
+        unknown_emit_state      String.Normal "Error: Unknown emit state "
+        to_expect               String.Normal "to expect", 10
+        to_emit                 String.Normal "to emit", 10
+        to_print                String.Normal "to print", 10
+end namespace
 namespace emit
         output_path       String.Normal "a.out", 0
         output_path_e     String.Normal "a.out.old", 0
-        stdout            String.Normal "syscall.stdout"
+        stdout            String.Normal "syscall.stdout "
         mark_va           String.Normal ","
         mark_sliteral     String.Normal '"'
 end namespace
@@ -83,7 +90,7 @@ main:
         ; Get the file path
         cmp qword [rsp], 2
         je .file_path_got
-        string.stdout e.expected_file_path
+        string.stderr e.expected_file_path
         call exitError
 
         ; Get the length of the file path
@@ -97,7 +104,7 @@ main:
         ; Checks the length is within the the capacity
         cmp [file_path.len], file_path.cap
         jl .file_path_success
-        string.stdout e.expected_file_path_256
+        string.stderr e.expected_file_path_256
         call exitError
 
         ; Copies the file path to the variable
@@ -112,7 +119,7 @@ main:
         mov [fd], rax
         cmp [fd], -1    ; check for error
         jne .file_open_success
-        string.stdout e.failed_to_open_file
+        string.stderr e.failed_to_open_file
         call exitError
 
         ; Get the length of the file
@@ -124,7 +131,7 @@ main:
         ; Check if it is within bounds
         cmp [file_length], code.cap
         jl .file_seek_success
-        string.stdout e.expected_file_size_1024
+        string.stderr e.expected_file_size_1024
         call exitError
         
         .file_seek_success:
@@ -139,34 +146,21 @@ main:
         syscall.rename emit.output_path, emit.output_path_e
 
         call tokenize
-        ; mov rax, tokens
-        ; mov qword [rax], 0
-        ; mov qword [rax + 8], 6
-        ; mov byte [rax + 16], 1
-        ; mov rbx, 1
-        ; imul rbx, TOKEN_SIZE
-        ; add rax, rbx
-        ; mov qword [rax], 7
-        ; mov qword [rax + 8], 13
-        ; mov byte [rax + 16], 2
-        ; mov [tokens.len], 2
-
         call printTokens
-
         call parse
 
         call exit
-
 
 exit:      syscall.exit 0
 exitError: syscall.exit 1
 
 printTokens:
         syscall.saveReg
-                string.stdout seperation_line
+                string.stdout dbg.seperation_line
         syscall.restoreReg
         push r10 ; index
         push rdi ; tokens
+        push rbx ; token type
 
         xor r10, r10
         mov rdi, tokens
@@ -177,33 +171,52 @@ printTokens:
                 push rdi
                 push r9
                 push r8
+                        ; calculate the index
+                        push r10
+                                imul r10, TOKEN_SIZE
+                                add rdi, r10
+                        pop r10
 
-                ; calculate the index
-                push r10
-                imul r10, TOKEN_SIZE
-                add rdi, r10
-                pop r10
+                        ; get the slice_start
+                        mov r9, [rdi]
+                        ; get the slice_end
+                        mov r8, [rdi + 8] 
+                        ; get the type
+                        mov bl, [rdi + 16]
 
-                ; get the slice_start
-                mov r9, [rdi]
-                ; get the slice_end
-                mov r8, [rdi + 8] 
+                        syscall.saveReg
+                        push r11
+                        push r8
+                                mov r11, code
+                                add r11, r9
+                                sub r8, r9
+                                syscall.stdout r11, r8
+                                string.stdout dbg.quote
 
-                ; TODO print the types
+                                cmp bl, TOKEN_TYPE_SYMBOL
+                                je .print_symbol
+                                cmp bl, TOKEN_TYPE_COMMA
+                                je .print_comma
+                                cmp bl, TOKEN_TYPE_SLITERAL
+                                je .print_sliteral
 
-                syscall.saveReg
-                push r11
-                push r8
-                        mov r11, code
-                        add r11, r9
-                        sub r8, r9
-                        syscall.stdout r11, r8
-                        string.stdout quote
-                        string.stdout newline
-                pop r8
-                pop r11
-                syscall.restoreReg
-                
+                                string.stderr e.unknown_token_type
+                                string.stderr e.to_print
+                                call exitError
+                                
+                                .print_symbol:
+                                        string.stdout dbg.token_type_symbol
+                                        jmp .print_exit
+                                .print_comma:
+                                        string.stdout dbg.token_type_comma
+                                        jmp .print_exit
+                                .print_sliteral:
+                                        string.stdout dbg.token_type_sliteral
+                                        jmp .print_exit
+                                .print_exit: string.stdout dbg.newline
+                        pop r8
+                        pop r11
+                        syscall.restoreReg
                 pop r8
                 pop r9
                 pop rdi
@@ -211,9 +224,13 @@ printTokens:
                 inc r10
                 jmp .loop
         .exit:
-        
+        pop rbx
         pop rdi
         pop r10
+
+        syscall.saveReg
+                string.stdout dbg.seperation_line
+        syscall.restoreReg
         ret
 
 tokenize:
@@ -294,20 +311,6 @@ tokenize:
                                 je  .token_append
                                 jne .token_skip
                         .token_append:
-                                ; dbg
-                                syscall.saveReg
-                                push r11
-                                push r10
-                                        mov r11, rsi ; code
-                                        add r11, r9
-                                        sub r10, r9  ; slice_end - slice_start
-                                        syscall.stdout r11, r10  ; lentgh
-                                        string.stdout quote
-                                        string.stdout newline
-                                pop r10
-                                pop r11
-                                syscall.restoreReg
-
                                 ; append
                                 inc [tokens.len]
                                 mov r9, r10  ; set slice_start
@@ -394,8 +397,8 @@ expectAny:
         cmp bl, TOKEN_TYPE_SLITERAL
         je .sliteral
 
-        string.stdout e.unknown_token_type
-        string.stdout e.to_expect
+        string.stderr e.unknown_token_type
+        string.stderr e.to_expect
         call exitError
 
         .symbol:
@@ -442,7 +445,6 @@ expectKeyword:
                 .true:
                         mov [emit.state], EMIT.STATE_STDOUT
                         mov r10, PARSE_STATE_EXPRESSION
-                        call emit
                         jmp .exit
                 .false:
                         ; TODO
@@ -459,6 +461,7 @@ expectKeyword:
         mov r8, r10
         pop r10
                       
+        call emit
         ret
 
 ; @param r8 : parse_state
@@ -473,8 +476,8 @@ expectExpression:
         cmp bl, TOKEN_TYPE_SLITERAL
         je .emit.expr
 
-        string.stdout e.unknown_token_type
-        string.stdout e.to_expect
+        string.stderr e.unknown_token_type
+        string.stderr e.to_expect
         call exitError
 
         .emit.expr:
@@ -486,7 +489,8 @@ expectExpression:
 
         .exit:
         pop rbx
-        jmp emit
+        call emit
+        ret
 
 ; @param r8 : parse_state
 ; @param rdi: token
@@ -497,7 +501,7 @@ expectExpression:
         mov [fd], rax
         cmp [fd], -1 ; check for error
         jne .file_open_success
-        string.stdout e.failed_to_open_file
+        string.stderr e.failed_to_open_file
         call exitError
 
         .file_open_success:
@@ -509,13 +513,12 @@ expectExpression:
         cmp [emit.state], EMIT.STATE_EXPR_VA
         je .write_expr_va
 
-        string.stdout e.unknown_emit_state
-        string.stdout e.to_emit
+        string.stderr e.unknown_emit_state
+        string.stderr e.to_emit
         call exitError
 
         .write_stdout:
                 syscall.write [fd], emit.stdout, emit.stdout.len
-                syscall.write [fd], space,       space.len
                 jmp .exit
         .write_expr:
                 syscall.write [fd], emit.mark_sliteral, emit.mark_sliteral.len
@@ -538,9 +541,7 @@ expectExpression:
         .write_expr_va:
                 syscall.write [fd], emit.mark_va, emit.mark_va.len
                 jmp .exit
-
-        .exit:
-                mov [emit.state], EMIT.STATE_NONE
+        .exit: mov [emit.state], EMIT.STATE_NONE
 
         ; close file
         syscall.close [fd]
