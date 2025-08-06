@@ -15,38 +15,43 @@ struc Token
 end struc
 TOKEN_SIZE = 17
 
-macro Token name*, n*
-end macro
-
 segment readable
 dbg_fnd_str_ltrl          String.Normal "Debug: Found string literal start!", 10
 dbg_fnd_str_ltrl_mid      String.Normal "Debug: Found string literal middle!", 10
 dbg_fnd_str_ltrl_end      String.Normal "Debug: Found string literal end!", 10
-e_expected_file_path      String.Normal "Error: Expected a file path, got none!", 10
-e_expected_file_path_256  String.Normal "Error: Expected a file path length to be < 256!", 10
-e_failed_to_open_file     String.Normal "Error: Failed to open the file!", 10
-e_expected_file_size_1024 String.Normal "Error: Expected a file size to be < 1024!", 10
-e_expected_keyword_found  String.Normal "Error: Expected keyword, found " 
-keyword_stdout            String.Normal "stdout"
+e:
+        .expected_file_path      String.Normal "Error: Expected a file path, got none!", 10
+        .expected_file_path_256  String.Normal "Error: Expected a file path length to be < 256!", 10
+        .failed_to_open_file     String.Normal "Error: Failed to open the file!", 10
+        .expected_file_size_1024 String.Normal "Error: Expected a file size to be < 1024!", 10
+        .expected_keyword_found  String.Normal "Error: Expected keyword, found " 
+        .unknown_token_type      String.Normal "Error: Unknown token type "
+        .unknown_emit_state      String.Normal "Error: Unknown emit state "
+        .to_expect               String.Normal "to expect", 10
+        .to_emit                 String.Normal "to emit", 10
 quote                     String.Normal "`"
 newline                   String.Normal 10
 seperation_line           String.Normal "-----------------------", 10
+space                     String.Normal " "
+emit_stdout               String.Normal "syscall.stdout"
+emit_output_path          String.Normal "a.out", 0
+namespace keyword
+        stdout            String.Normal "stdout"
+end namespace
 
 segment readable writeable
 fd          dq 0
 file_length dq 0
 file_path   String.Reserved 256
-parse_state:              dq PARSE_STATE_NONE
-        .buffer           String.Reserved 1024
-        .literal          dq PARSE_STATE_NONE
-        .append_continue  db 0
-code    String.Reserved 1024
+code        String.Reserved 1024
 tokens:
         repeat 1024, i:0
                 .i Token 
         end repeat
         .len dq 0
         .cap = 1024
+
+emit_state db EMIT_STATE_NONE
 
 TOKEN_STATE_NONE     = 0x00
 TOKEN_STATE_SYMBOL   = 0x10
@@ -59,7 +64,9 @@ TOKEN_TYPE_SLITERAL  = 0x20
 PARSE_STATE_NONE            = 0x00
 PARSE_STATE_KEYWORD         = 0x10
 PARSE_STATE_EXPRESSION      = 0x20
-PARSE_STATE_EXPRESSION_STR  = 0x21
+
+EMIT_STATE_NONE    = 0x00
+EMIT_STATE_STDOUT  = 0x01
 
 segment executable
 entry main
@@ -67,8 +74,8 @@ main:
         ; Get the file path
         cmp qword [rsp], 2
         je .file_path_got
-        string.stdout e_expected_file_path
-        je exitError
+        string.stdout e.expected_file_path
+        call exitError
 
         ; Get the length of the file path
         .file_path_got:
@@ -81,8 +88,8 @@ main:
         ; Checks the length is within the the capacity
         cmp [file_path.len], file_path.cap
         jl .file_path_success
-        string.stdout e_expected_file_path_256
-        je exitError
+        string.stdout e.expected_file_path_256
+        call exitError
 
         ; Copies the file path to the variable
         .file_path_success:
@@ -96,8 +103,8 @@ main:
         mov [fd], rax
         cmp [fd], -1    ; check for error
         jne .file_open_success
-        string.stdout e_failed_to_open_file
-        je exitError
+        string.stdout e.failed_to_open_file
+        call exitError
 
         ; Get the length of the file
         .file_open_success:
@@ -108,8 +115,8 @@ main:
         ; Check if it is within bounds
         cmp [file_length], code.cap
         jl .file_seek_success
-        string.stdout e_expected_file_size_1024
-        je exitError
+        string.stdout e.expected_file_size_1024
+        call exitError
         
         .file_seek_success:
         ; Read the file
@@ -118,6 +125,9 @@ main:
 
         ; Close the file
         syscall.close [fd]
+
+        ; remove a.out
+        syscall.rename emit_output_path, 0
 
         call tokenize
         ; mov rax, tokens
@@ -134,11 +144,7 @@ main:
 
         call printTokens
 
-        syscall.exit [tokens.len]
-
-        ; mov rsi, code
-        ; mov rdx, parse_state.buffer
-        ; call parse
+        call parse
 
         call exit
 
@@ -173,6 +179,8 @@ printTokens:
                 mov r9, [rdi]
                 ; get the slice_end
                 mov r8, [rdi + 8] 
+
+                ; TODO print the types
 
                 syscall.saveReg
                 push r11
@@ -317,151 +325,199 @@ tokenize:
         pop r10
         ret
 
-; rsi = code
-; rdx = parse_state.buffer
 parse:
-        push rax
-        push rcx
+        push r10 ; index
+        push r8  ; parse_state
+        push rdi ; tokens
 
-        xor rax, rax
+        xor r10, r10
+        xor r8, r8
+        mov rdi, tokens
         .loop:
-                mov cl, [rsi + rax] ; code[i]
-                mov ch, [parse_state.append_continue]
-                ; if append_continue == true then append
-                ; if code[i] == ' ' then descent
-                cmp ch, 1
-                je .append
-                cmp cl, ' '
-                je .descent
-                .append:
-                        ; Add cl to parse_state.buffer
-                        push r10
-                        mov r10, [parse_state.buffer.len] ; j 
-                        mov [rdx + r10], cl ; parse_state.buffer[j] = cl
-                        inc [parse_state.buffer.len]
-                        pop r10
-                        cmp ch, 0
-                        je .after_descent
-                .descent:
-                        cmp qword [parse_state], PARSE_STATE_NONE
-                        je .expect_any
-                        cmp qword [parse_state], PARSE_STATE_KEYWORD
-                        je .expect_keyword
-                        cmp qword [parse_state], PARSE_STATE_EXPRESSION
-                        je .expect_expression
-                        .expect_any:
+                cmp r10, [tokens.len]
+                je .exit
+
+                 ; calculate the index
+                push rdi
+                push r10
+                        imul r10, TOKEN_SIZE
+                        add rdi, r10
+                pop r10
+
+                cmp r8, PARSE_STATE_NONE
+                je .parse_state_none
+                cmp r8, PARSE_STATE_KEYWORD
+                je .parse_state_keyword
+                cmp r8, PARSE_STATE_EXPRESSION
+                je .parse_state_expression
+
+                .parse_state:
+                       
+                        .parse_state_none:
                                 call expectAny
-                                jmp .descent
-                        .expect_keyword:
+                                jmp .parse_state_after
+                        .parse_state_keyword:
                                 call expectKeyword
-                                jmp .after_descent
-                        .expect_expression:
+                                jmp .parse_state_after
+                        .parse_state_expression:
                                 call expectExpression
-                                jmp .after_descent
+                                jmp .parse_state_after
+                        .parse_state_after:
+                                pop rdi
 
-                .after_descent:
-                ; Check for the code EOF
-                cmp rax, [code.len]
-                jg .exit
-                inc rax
+                inc r10
                 jmp .loop
+
         .exit:
 
-        pop rcx
-        pop rax
+        pop rdi
+        pop r8
+        pop r10
         ret
 
+; @param r8 : parse_state
+; @param rdi: token
 expectAny:
-        ; TODO:
-        mov qword [parse_state], PARSE_STATE_KEYWORD
-        ret
+        push rbx ; token.type
+        mov bl, [rdi + 16]
 
-expectKeyword:
-        push rdi
-        push rdx
-        push rsi
-        push rax
+        cmp bl, TOKEN_TYPE_SYMBOL
+        je .symbol
+        cmp bl, TOKEN_TYPE_COMMA
+        je .comma
+        cmp bl, TOKEN_TYPE_SLITERAL
+        je .sliteral
 
-        ; TODO: go through a list of keywords
-        xor rax, rax
-        mov rdi, keyword_stdout      ; stdout
-        mov rsi, rdx                 ; parse_state.buffer
-        mov rdx, keyword_stdout.len  ; length
-        mov r10, [parse_state.buffer.len]       ; length
-        call string.cmpr
-        cmp rax, 1
-        jne .false
-        ; .true:
-                syscall.saveReg
-                string.stdout keyword_stdout
-                string.stdout newline
-                syscall.restoreReg
-                mov qword    [parse_state],                 PARSE_STATE_EXPRESSION
-                mov qword    [parse_state.literal],         PARSE_STATE_NONE
-                mov          [parse_state.append_continue], 1
-                string.clear parse_state.buffer
-                pop rax
-                pop rsi
-                pop rdx
-                pop rdi
-                ret
-        .false:
-                syscall.saveReg
-                string.stdout e_expected_keyword_found
-                string.stdout quote
-                string.stdout parse_state.buffer
-                string.stdout quote
-                string.stdout newline
-                syscall.restoreReg
-                call exitError
+        string.stdout e.unknown_token_type
+        string.stdout e.to_expect
+        call exitError
 
-expectExpression:
-        push rdx
-
-        cmp [parse_state.literal], PARSE_STATE_EXPRESSION_STR
-        je .literal_str
-
-        cmp byte [rdx], '"'
-        je .string_literal_start
-        cmp byte [rdx], ' '
-        ; TODO:
-        jmp .unknown
-
-        .literal_str:
-        add rdx, [parse_state.buffer.len]
-        dec rdx
-        cmp byte [rdx], '"'
-        je .string_literal_end
-        jne .string_literal_middle
-
-        .string_literal_start:
-                syscall.saveReg
-                string.stdout dbg_fnd_str_ltrl
-                string.stdout parse_state.buffer
-                string.stdout newline
-                syscall.restoreReg
-                mov qword [parse_state.literal],         PARSE_STATE_EXPRESSION_STR
-                mov       [parse_state.append_continue], 1
+        .symbol:
+                mov r8, PARSE_STATE_KEYWORD
+                call expectKeyword
                 jmp .exit
-        .string_literal_middle:
-                syscall.saveReg
-                string.stdout dbg_fnd_str_ltrl_mid
-                syscall.restoreReg
+        .comma:
+                ; TODO
+                syscall.exit 70
                 jmp .exit
-        .string_literal_end:
-                syscall.saveReg
-                string.stdout dbg_fnd_str_ltrl_end
-                string.stdout parse_state.buffer
-                string.stdout newline
-                syscall.restoreReg
-                mov qword    [parse_state],                 PARSE_STATE_NONE
-                mov qword    [parse_state.literal],         PARSE_STATE_NONE
-                mov          [parse_state.append_continue], 0
-                string.clear parse_state.buffer
+        .sliteral:
+                mov r8, PARSE_STATE_EXPRESSION
+                call expectExpression
                 jmp .exit
-        .unknown:
-                syscall.exit 69
 
         .exit:
+        pop rbx
+        ret
+
+; @param r8 : parse_state
+; @param rdi: token
+expectKeyword:
+        ; TODO: go through all of the keywords
+
+        push r10 ; parse_state
+
+        ; compare
+        push rbx ; a
+        push rdx ; b
+        push r8  ; a.len
+        push r9  ; b.len
+        push rax ; rval
+                mov rbx, keyword.stdout
+                mov r8,  keyword.stdout.len
+                
+                mov rdx, code
+                add rdx, [rdi]
+                mov r9,  [rdi + 8]
+                sub r9,  [rdi]
+                call string.cmpr
+                cmp rax, 1
+                je  .true
+                jne .false
+                .true:
+                        mov [emit_state], EMIT_STATE_STDOUT
+                        mov r10, PARSE_STATE_EXPRESSION
+                        jmp .exit
+                .false:
+                        ; TODO
+                        syscall.exit -1
+                        jmp .exit
+        .exit:
+        pop rax
+        pop r9
+        pop r8
         pop rdx
+        pop rbx
+
+        ; Save the parse_state
+        mov r8, r10
+        pop r10
+                      
+        ret
+
+; @param r8 : parse_state
+; @param rdi: token
+expectExpression:
+        ; TODO
+        jmp emit
+
+; @param r8 : parse_state
+; @param rdi: token
+?emit:
+        syscall.saveReg
+        ; open file        
+        syscall.open emit_output_path, 0101 ; O_CREAT | O_WRONLY
+        mov [fd], rax
+        cmp [fd], -1 ; check for error
+        jne .file_open_success
+        string.stdout e.failed_to_open_file
+        call exitError
+
+        .file_open_success:
+        cmp [emit_state], EMIT_STATE_STDOUT
+        je .write_stdout
+
+        string.stdout e.unknown_emit_state
+        string.stdout e.to_emit
+        call exitError
+
+        .write_stdout:
+                syscall.write [fd], emit_stdout, emit_stdout.len
+                syscall.write [fd], space,       space.len
+
+                ; get the expression
+                syscall.restoreReg
+                push rax
+                push r11
+                push r12
+                        mov al, [rdi + 16] ; type
+                        cmp al, TOKEN_TYPE_SLITERAL
+                        je .stdout_sliteral
+
+                        string.stdout e.unknown_token_type
+                        string.stdout e.to_emit
+                        call exitError
+
+                        .stdout_sliteral:
+                        mov r11, code
+                        add r11, [rdi]
+                        dec r11  ; first quote
+                        mov r12, [rdi + 8]
+                        sub r12, [rdi]
+                        inc r12  ; last quote
+                        syscall.saveReg
+                                syscall.write [fd], r11, r12
+                        syscall.restoreReg
+                        jmp .write_stdout_after
+
+                .write_stdout_after:
+                pop r12
+                pop r11
+                pop rax
+                syscall.saveReg
+                jmp .after_write
+        .after_write:
+
+        ; close file
+        syscall.close [fd]
+        syscall.restoreReg
         ret
