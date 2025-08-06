@@ -35,6 +35,14 @@ macro read fd*, buffer*, count*
         syscall
 end macro
 
+macro write fd*, buffer*, buffer_length*
+        mov rax, 1
+        mov rdi, fd
+        mov rsi, buffer
+        mov rdx, buffer_length
+        syscall
+end macro
+
 ; Calls the sys_write with stdout syscall:
 macro stdout buffer*, buffer_length*
         mov rax, 1
@@ -96,3 +104,10 @@ macro lseek.end fd*, offset*
         mov rdx, 2
         syscall
 end macro 
+
+macro rename oldname*, newname*
+        mov rax, 82
+        mov rdi, oldname
+        mov rsi, newname
+        syscall
+end macro
