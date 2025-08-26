@@ -18,20 +18,23 @@ TOKEN_SIZE = 17
 TOKEN_STATE_NONE     = 0x00
 TOKEN_STATE_SYMBOL   = 0x10
 TOKEN_STATE_SLITERAL = 0x20
+TOKEN_STATE_NLITERAL = 0x21
 
 TOKEN_TYPE_SYMBOL    = 0x00
 TOKEN_TYPE_COMMA     = 0x10
 TOKEN_TYPE_SLITERAL  = 0x20
+TOKEN_TYPE_NLITERAL  = 0x21
 
 PARSE_STATE_NONE        = 0x00
 PARSE_STATE_KEYWORD     = 0x10
 PARSE_STATE_EXPRESSION  = 0x20
 
 namespace EMIT
-        STATE_NONE     = 0x00
-        STATE_STDOUT   = 0x01
-        STATE_EXPR     = 0x10
-        STATE_EXPR_VA  = 0x11
+        STATE_NONE       = 0x00
+        STATE_STDOUT     = 0x01
+        STATE_EXPR_SLIT  = 0x10
+        STATE_EXPR_NLIT  = 0x11
+        STATE_EXPR_VA    = 0x20
 end namespace 
 
 segment readable
@@ -46,6 +49,7 @@ namespace dbg
         token_type_symbol     String.Normal "SYMBOL"
         token_type_comma      String.Normal "COMMA"
         token_type_sliteral   String.Normal "SLITERAL"
+        token_type_nliteral   String.Normal "NLITERAL"
 end namespace
 namespace e
         expected_file_path      String.Normal "Error: Expected a file path, got none!", 10
@@ -62,9 +66,12 @@ end namespace
 namespace emit
         output_path       String.Normal "a.out", 0
         output_path_e     String.Normal "a.out.old", 0
-        stdout            String.Normal "syscall.stdout "
-        mark_va           String.Normal ","
-        mark_sliteral     String.Normal '"'
+        stdout            String.Normal "syscall.stdout"
+        space             String.Normal " "
+        newline           String.Normal 10
+        mark_va           String.Normal "va"
+        mark_sliteral     String.Normal 'push.str'
+        mark_nliteral     String.Normal 'push.num'
 end namespace
 namespace keyword
         stdout            String.Normal "stdout"
@@ -82,7 +89,7 @@ tokens:
         .len dq 0
         .cap = 1024
 
-emit.state db EMIT.STATE_NONE
+emit.state   db EMIT.STATE_NONE
 
 segment executable
 entry main
@@ -138,6 +145,13 @@ main:
         ; Read the file
         syscall.read [fd], code, code.cap
         mov [code.len], rax
+        ; add space to the end
+        push rax
+                mov rax, code
+                add rax, [code.len]
+                mov al, 10
+                inc [code.len]
+        pop rax
 
         ; Close the file
         syscall.close [fd]
@@ -199,6 +213,8 @@ printTokens:
                                 je .print_comma
                                 cmp bl, TOKEN_TYPE_SLITERAL
                                 je .print_sliteral
+                                cmp bl, TOKEN_TYPE_NLITERAL
+                                je .print_nliteral
 
                                 string.stderr e.unknown_token_type
                                 string.stderr e.to_print
@@ -212,6 +228,9 @@ printTokens:
                                         jmp .print_exit
                                 .print_sliteral:
                                         string.stdout dbg.token_type_sliteral
+                                        jmp .print_exit
+                                .print_nliteral:
+                                        string.stdout dbg.token_type_nliteral
                                         jmp .print_exit
                                 .print_exit: string.stdout dbg.newline
                         pop r8
@@ -238,6 +257,7 @@ tokenize:
         push r9  ; slice_start
         push r11 ; surround_count
         push r12 ; token_index
+        push r13 ; number
         push rax ; code[i]
         push rsi ; code
         push rdi ; tokens
@@ -246,6 +266,7 @@ tokenize:
         xor r9, r9
         xor r11, r11
         xor r12, r12
+        xor r13, r13
         xor rax, rax
         mov rsi, code
         mov rdi, tokens
@@ -271,29 +292,68 @@ tokenize:
                         mov byte [rdi + 16], TOKEN_TYPE_SYMBOL  ; type
 
                         ; find the token type
-                        cmp cl, '"'
+                                cmp cl, '"'
                         je .token_is_sliteral
+                        ; check if it is number
+                        push rbx
+                        push r8
+                        push rax
+                                cmp r11, 0
+                                jg .is_number_exit
+
+                                mov rbx, rsi
+                                add rbx, r9
+                                mov r8, r10
+                                sub r8, r9
+                                call string.isNumber
+                                cmp rax, 1
+                                je .is_number_true
+
+                                cmp r13, 0
+                                jg  .is_number_end
+                                jmp .is_number_exit
+
+                                .is_number_true:
+                                        pop rax
+                                        pop r8
+                                        pop rbx
+                                        inc r13
+                                        jmp .token_after
+                                .is_number_end:
+                                        pop rax
+                                        pop r8
+                                        pop rbx
+                                        xor r13, r13
+                                        ; first is for the current skipped char, so we can come back
+                                        ; second is for the same reason but bc it is incrased at the end of
+                                        ; the loop
+                                        dec qword [rdi + 8]
+                                        sub r10, 2
+                                        jmp .token_is_nliteral
+                        .is_number_exit:
+                                pop rax
+                                pop r8
+                                pop rbx
+                        
                         cmp cl, ','
                         je .char_is_comma
                         cmp cl, ' '
                         je .char_is_space
+                        ; last
                         push r10
                                 inc r10
                                 cmp r10, [code.len]
                         pop r10
-                        je .should_add_last
+                        je .token_skip ; means it is empty
                         jne .token_after
 
-                        .should_add_last:
-                                ; skip the empty, otherwise append
-                                cmp r10, r9
-                                jne .token_append
-                                je  .token_skip
                         .char_is_comma:
+                                ; is sliteral?
                                 cmp r11, 0
                                 jg .token_after
                                 je .token_is_comma
                         .char_is_space:
+                                ; is sliteral?
                                 cmp r11, 0
                                 jg .token_after
                                 ; skip the empty, otherwise append
@@ -310,6 +370,9 @@ tokenize:
                                 mov byte [rdi + 16], TOKEN_TYPE_SLITERAL  ; type
                                 je  .token_append
                                 jne .token_skip
+                        .token_is_nliteral:
+                                mov byte [rdi + 16], TOKEN_TYPE_NLITERAL ; type
+                                jmp .token_append
                         .token_append:
                                 ; append
                                 inc [tokens.len]
@@ -331,6 +394,7 @@ tokenize:
         pop rdi
         pop rsi
         pop rax
+        pop r13
         pop r12
         pop r11
         pop r9
@@ -395,7 +459,9 @@ expectAny:
         cmp bl, TOKEN_TYPE_COMMA
         je .comma
         cmp bl, TOKEN_TYPE_SLITERAL
-        je .sliteral
+        je .expr
+        cmp bl, TOKEN_TYPE_NLITERAL
+        je .expr
 
         string.stderr e.unknown_token_type
         string.stderr e.to_expect
@@ -409,7 +475,7 @@ expectAny:
                 ; TODO
                 syscall.exit 70
                 jmp .exit
-        .sliteral:
+        .expr:
                 mov r8, PARSE_STATE_EXPRESSION
                 call expectExpression
                 jmp .exit
@@ -474,14 +540,19 @@ expectExpression:
         cmp bl, TOKEN_TYPE_COMMA
         je .emit.expr_va
         cmp bl, TOKEN_TYPE_SLITERAL
-        je .emit.expr
+        je .emit.expr_slit
+        cmp bl, TOKEN_TYPE_NLITERAL
+        je .emit.expr_nlit
 
         string.stderr e.unknown_token_type
         string.stderr e.to_expect
         call exitError
 
-        .emit.expr:
-                mov [emit.state], EMIT.STATE_EXPR
+        .emit.expr_slit:
+                mov [emit.state], EMIT.STATE_EXPR_SLIT
+                jmp .exit
+        .emit.expr_nlit:
+                mov [emit.state], EMIT.STATE_EXPR_NLIT
                 jmp .exit
         .emit.expr_va:
                 mov [emit.state], EMIT.STATE_EXPR_VA
@@ -508,10 +579,12 @@ expectExpression:
         syscall.lseek.end [fd], 0
         cmp [emit.state], EMIT.STATE_STDOUT
         je .write_stdout
-        cmp [emit.state], EMIT.STATE_EXPR
-        je .write_expr
         cmp [emit.state], EMIT.STATE_EXPR_VA
         je .write_expr_va
+        cmp [emit.state], EMIT.STATE_EXPR_SLIT
+        je .write_expr_slit
+        cmp [emit.state], EMIT.STATE_EXPR_NLIT
+        je .write_expr_nlit
 
         string.stderr e.unknown_emit_state
         string.stderr e.to_emit
@@ -519,9 +592,15 @@ expectExpression:
 
         .write_stdout:
                 syscall.write [fd], emit.stdout, emit.stdout.len
+                syscall.write [fd], emit.newline, emit.newline.len
                 jmp .exit
-        .write_expr:
+        .write_expr_va:
+                syscall.write [fd], emit.mark_va, emit.mark_va.len
+                syscall.write [fd], emit.newline, emit.newline.len
+                jmp .exit
+        .write_expr_slit:
                 syscall.write [fd], emit.mark_sliteral, emit.mark_sliteral.len
+                syscall.write [fd], emit.space, emit.space.len
                 ; get the expression
                 syscall.restoreReg
                 push r11
@@ -536,10 +615,26 @@ expectExpression:
                 pop r12
                 pop r11
                 syscall.saveReg
-                syscall.write [fd], emit.mark_sliteral, emit.mark_sliteral.len
+                syscall.write [fd], emit.newline, emit.newline.len
                 jmp .exit
-        .write_expr_va:
-                syscall.write [fd], emit.mark_va, emit.mark_va.len
+        .write_expr_nlit:
+                syscall.write [fd], emit.mark_nliteral, emit.mark_nliteral.len
+                syscall.write [fd], emit.space, emit.space.len
+                ; get the expression
+                syscall.restoreReg
+                push r11
+                push r12
+                        mov r11, code
+                        add r11, [rdi]
+                        mov r12, [rdi + 8]
+                        sub r12, [rdi]
+                        syscall.saveReg
+                                syscall.write [fd], r11, r12
+                        syscall.restoreReg
+                pop r12
+                pop r11
+                syscall.saveReg
+                syscall.write [fd], emit.newline, emit.newline.len
                 jmp .exit
         .exit: mov [emit.state], EMIT.STATE_NONE
 
