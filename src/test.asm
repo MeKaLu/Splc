@@ -11,18 +11,15 @@ end namespace
 entry main
 
 segment readable
-stdout String.Normal "stdout"
-foo    String.Normal "stdout"
+number String.Normal "123123"
 
 segment executable
 main:
         ; compare
-        mov rbx, stdout
-        mov r8,  stdout.len
-        
-        mov rdx, foo
-        mov r9,  foo.len
-        call string.cmpr
+        mov rbx, number
+        mov r8,  number.len
+     
+        call string.isNumber
         cmp rax, 1
         je  .true
         jne .false

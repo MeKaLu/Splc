@@ -148,4 +148,42 @@ cmpr:
         pop rbx
         pop r10
         ret
-        
+
+; rbx is the string
+; r8 is the length
+; rax is the return value (0 or 1)
+isNumber:
+        ASCII_MINUS = 45
+        ASCII_ZERO  = 48
+        ASCII_NINE  = 57
+
+        push r9 ; index
+        mov r9, 1
+        mov rax, [rbx]
+        cmp al, ASCII_MINUS
+        je .loop
+        cmp al, ASCII_ZERO
+        jl .exit_false
+        cmp al, ASCII_NINE
+        jg .exit_false
+        .loop:
+                cmp r8, r9
+                je .exit_true
+
+                mov rax, [rbx + r9]
+                cmp al, ASCII_ZERO
+                jl .exit_false
+                cmp al, ASCII_NINE
+                jg .exit_false
+                
+                .loop_end:
+                        inc r9
+                        jmp .loop
+        .exit_false:
+                mov rax, 0
+                jmp .exit
+        .exit_true:
+                mov rax, 1
+        .exit:
+        pop r9
+        ret        
